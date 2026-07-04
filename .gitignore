@@ -1,0 +1,19 @@
+﻿.env
+
+logs/
+data/
+
+__pycache__/
+*.py[cod]
+
+.venv/
+venv/
+
+.pytest_cache/
+.mypy_cache/
+
+*.log
+
+main_O.py
+graphQL endpoint.md
+.env

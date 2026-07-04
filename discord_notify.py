@@ -1,0 +1,276 @@
+import logging
+from datetime import datetime, timezone
+
+import requests
+
+from config import (
+    DISCORD_CHANGE_WEBHOOK_URL,
+    DISCORD_LOG_WEBHOOK_URL,
+    DISCORD_TIMEOUT,
+)
+
+
+def discord_bool(value: bool) -> str:
+    return "✅ True" if value else "❌ False"
+
+
+def truncate(value, limit: int = 900) -> str:
+    value = str(value or "")
+    return value if len(value) <= limit else value[:limit] + "...[truncated]"
+
+
+def choose_embed_color(diff: dict) -> int:
+    if diff["removed"]:
+        return 0xED4245
+    if diff["added"] and diff["changed"]:
+        return 0xFAA61A
+    if diff["added"]:
+        return 0x57F287
+    if diff["changed"]:
+        return 0xFEE75C
+    return 0x5865F2
+
+
+def calculate_change_severity(diff: dict) -> str:
+    if diff["removed"]:
+        return "CRITICAL"
+
+    for item in diff["changed"]:
+        changed_fields = set(item["changes"].keys())
+        if "eligible_for_bounty" in changed_fields:
+            return "CRITICAL"
+        if "eligible_for_submission" in changed_fields:
+            return "CRITICAL"
+        if "instruction" in changed_fields:
+            return "HIGH"
+
+    if diff["added"]:
+        return "HIGH"
+
+    if diff["changed"]:
+        return "MEDIUM"
+
+    return "LOW"
+
+
+def format_added(items: list[dict]) -> str:
+    if not items:
+        return "None"
+
+    lines = []
+
+    for item in items[:8]:
+        lines.append(
+            f"```text\n"
+            f"{item['identifier']}\n"
+            f"Bounty: {discord_bool(item['eligible_for_bounty'])}\n"
+            f"Submission: {discord_bool(item['eligible_for_submission'])}\n"
+            f"Severity: {item['cvss_score'] or 'N/A'}\n"
+            f"```"
+        )
+
+    if len(items) > 8:
+        lines.append(f"...and {len(items) - 8} more added item(s).")
+
+    return "\n".join(lines)
+
+
+def format_removed(items: list[dict]) -> str:
+    if not items:
+        return "None"
+
+    lines = [f"• `{item['identifier']}`" for item in items[:12]]
+
+    if len(items) > 12:
+        lines.append(f"...and {len(items) - 12} more removed item(s).")
+
+    return "\n".join(lines)
+
+
+def format_changed(items: list[dict]) -> str:
+    if not items:
+        return "None"
+
+    sections = []
+
+    for item in items[:5]:
+        lines = [f"**`{item['identifier']}`**"]
+
+        for field, values in item["changes"].items():
+            old = truncate(values["old"], 300)
+            new = truncate(values["new"], 300)
+
+            lines.append(
+                f"`{field}`\n"
+                f"Old: `{old}`\n"
+                f"New: `{new}`"
+            )
+
+        sections.append("\n".join(lines))
+
+    if len(items) > 5:
+        sections.append(f"...and {len(items) - 5} more modified item(s).")
+
+    return "\n\n".join(sections)
+
+
+def send_discord_notification(handle: str, diff: dict) -> None:
+    if not DISCORD_CHANGE_WEBHOOK_URL:
+        logging.info("[%s] Discord change webhook not configured. Skipping alert.", handle)
+        return
+
+    added_count = len(diff["added"])
+    removed_count = len(diff["removed"])
+    changed_count = len(diff["changed"])
+    severity = calculate_change_severity(diff)
+
+    payload = {
+        "username": "BB Scope Alerts",
+        "embeds": [
+            {
+                "title": f"🚨 {severity} — HackerOne Scope Change Detected",
+                "url": f"https://hackerone.com/{handle}/policy_scopes",
+                "color": choose_embed_color(diff),
+                "fields": [
+                    {"name": "Program", "value": f"`{handle}`", "inline": True},
+                    {"name": "Platform", "value": "`HackerOne`", "inline": True},
+                    {
+                        "name": "Summary",
+                        "value": (
+                            f"🟢 Added: **{added_count}**\n"
+                            f"🔴 Removed: **{removed_count}**\n"
+                            f"🟡 Modified: **{changed_count}**"
+                        ),
+                        "inline": False,
+                    },
+                    {
+                        "name": "🟢 Added",
+                        "value": format_added(diff["added"])[:1024],
+                        "inline": False,
+                    },
+                    {
+                        "name": "🔴 Removed",
+                        "value": format_removed(diff["removed"])[:1024],
+                        "inline": False,
+                    },
+                    {
+                        "name": "🟡 Modified",
+                        "value": format_changed(diff["changed"])[:1024],
+                        "inline": False,
+                    },
+                    {
+                        "name": "Policy",
+                        "value": f"https://hackerone.com/{handle}/policy_scopes",
+                        "inline": False,
+                    },
+                ],
+                "footer": {"text": "HackerOne Scope Watcher"},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ],
+    }
+
+    response = requests.post(
+        DISCORD_CHANGE_WEBHOOK_URL,
+        json=payload,
+        timeout=DISCORD_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    logging.info("[%s] Discord scope-change notification sent.", handle)
+
+
+def send_run_success(log_line: str) -> None:
+    if not DISCORD_LOG_WEBHOOK_URL:
+        logging.info("Discord log webhook not configured. Skipping success summary.")
+        return
+
+    payload = {
+        "username": "BB Scope Script Log",
+        "content": f"```text\n{log_line}\n```",
+    }
+
+    response = requests.post(
+        DISCORD_LOG_WEBHOOK_URL,
+        json=payload,
+        timeout=DISCORD_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    logging.info("Discord run success summary sent.")
+
+
+def send_run_error(total_targets: int, failures: int) -> None:
+    if not DISCORD_CHANGE_WEBHOOK_URL:
+        logging.info("Discord change webhook not configured. Skipping error alert.")
+        return
+
+    payload = {
+        "username": "BB Scope Alerts",
+        "embeds": [
+            {
+                "title": "🚨 Scope Watcher Completed With Errors",
+                "color": 0xED4245,
+                "fields": [
+                    {"name": "Targets", "value": str(total_targets), "inline": True},
+                    {"name": "Failures", "value": str(failures), "inline": True},
+                ],
+                "footer": {"text": "BB Scope Alerts"},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ],
+    }
+
+    response = requests.post(
+        DISCORD_CHANGE_WEBHOOK_URL,
+        json=payload,
+        timeout=DISCORD_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    logging.info("Discord run error alert sent.")
+
+def send_target_error(handle: str, error: Exception) -> None:
+    if not DISCORD_CHANGE_WEBHOOK_URL:
+        logging.info("[%s] Discord change webhook not configured. Skipping target error alert.", handle)
+        return
+
+    policy_url = getattr(error, "policy_url", f"https://hackerone.com/{handle}/policy_scopes")
+    graphql_url = getattr(error, "graphql_url", "https://hackerone.com/graphql")
+    status_code = getattr(error, "status_code", "N/A")
+    response_text = getattr(error, "response_text", "")
+
+    payload = {
+        "username": "BB Scope Alerts",
+        "embeds": [
+            {
+                "title": "🚨 HackerOne Scope Watcher Target Failed",
+                "url": policy_url,
+                "color": 0xED4245,
+                "fields": [
+                    {"name": "Target", "value": f"`{handle}`", "inline": True},
+                    {"name": "HTTP Status", "value": f"`{status_code}`", "inline": True},
+                    {"name": "Error Type", "value": f"`{type(error).__name__}`", "inline": True},
+                    {"name": "Policy URL", "value": policy_url, "inline": False},
+                    {"name": "GraphQL Endpoint", "value": graphql_url, "inline": False},
+                    {"name": "Error", "value": f"```text\n{truncate(str(error), 900)}\n```", "inline": False},
+                    {
+                        "name": "Response",
+                        "value": f"```text\n{truncate(response_text, 900)}\n```" if response_text else "`N/A`",
+                        "inline": False,
+                    },
+                ],
+                "footer": {"text": "BB Scope Alerts"},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ],
+    }
+
+    response = requests.post(
+        DISCORD_CHANGE_WEBHOOK_URL,
+        json=payload,
+        timeout=DISCORD_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    logging.info("[%s] Discord target error alert sent.", handle)
