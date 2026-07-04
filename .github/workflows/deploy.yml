@@ -26,6 +26,16 @@ jobs:
             git reset --hard origin/main
 
             echo "[+] Building Docker image..."
-            sudo docker build -t bb-program-monitoring .
+            docker build -t bb-program-monitoring .
+
+            echo "[+] Cleaning old Docker layers..."
+            docker image prune -f
 
             echo "[+] Deploy complete."
+
+      - name: Notify Discord on failure
+        if: failure()
+        run: |
+          curl -H "Content-Type: application/json" \
+            -d '{"content":"🚨 **BB Program Monitoring deploy failed** in GitHub Actions. Check the Actions logs."}' \
+            "${{ secrets.DISCORD_CHANGE_WEBHOOK_URL }}"
