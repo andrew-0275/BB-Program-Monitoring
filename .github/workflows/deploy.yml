@@ -33,6 +33,9 @@ jobs:
 
             echo "[+] Deploy complete."
 
+            echo "[TEST] Intentionally failing GitHub Action..."
+            exit 1
+
       - name: Notify Discord on failure
         if: failure()
         run: |
