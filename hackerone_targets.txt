@@ -200,6 +200,7 @@ https://hackerone.com/quora/policy_scopes
 https://hackerone.com/nintendo/policy_scopes
 https://hackerone.com/portswigger/policy_scopes
 https://hackerone.com/starbucks/policy_scopes
+https://hackerone.com/brave/policy_scopes
 https://hackerone.com/yelp/policy_scopes
 https://hackerone.com/ruby/policy_scopes
 https://hackerone.com/moneybird/policy_scopes

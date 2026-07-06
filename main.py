@@ -19,6 +19,7 @@ from config import (
 from discord_notify import (
     send_discord_scope_notification,
     send_program_discovery_notification,
+    send_discord_reports_notification,
     send_run_error,
     send_run_success,
     send_target_error,
@@ -52,90 +53,162 @@ def save_json(path: Path, data: dict) -> None:
         encoding="utf-8",
     )
 
+def scope_key(item: dict) -> str:
+    return f"{item.get('identifier', '')}|{item.get('display_name', '')}"
+
+
+# True only when the scope asset is both bounty-eligible and submission-eligible.
+# Used to filter added/removed assets so mobile alerts only fire for paid, actionable scope.
+def is_paid_scope(item: dict) -> bool:
+    return (
+        item.get("eligible_for_bounty") is True
+        and item.get("eligible_for_submission") is True
+    )
+
 
 def compare_snapshots(old: dict, new: dict) -> dict:
-    old_map = {item["identifier"]: item for item in old.get("scopes", [])}
-    new_map = {item["identifier"]: item for item in new.get("scopes", [])}
+    old_map = {scope_key(item): item for item in old.get("scopes", [])}
+    new_map = {scope_key(item): item for item in new.get("scopes", [])}
 
-    added = [new_map[k] for k in sorted(set(new_map) - set(old_map))]
-    removed = [old_map[k] for k in sorted(set(old_map) - set(new_map))]
+    added = [
+        new_map[k]
+        for k in sorted(set(new_map) - set(old_map))
+        if is_paid_scope(new_map[k]) # Filtering to only include newly added assets where eligible_for_bounty/eligible_for_submission == True
+    ]
 
-    changed = []
+    removed = [
+        old_map[k]
+        for k in sorted(set(old_map) - set(new_map))
+        if is_paid_scope(old_map[k]) # Filtering to only include the old asset state where eligible_for_bounty/eligible_for_submission == True
+    ]
+    paid_scope_changes = []
+    report_changes = []
 
-    for identifier in sorted(set(old_map) & set(new_map)):
-        old_item = old_map[identifier]
-        new_item = new_map[identifier]
+    for key in sorted(set(old_map) & set(new_map)):
+        old_item = old_map[key]
+        new_item = new_map[key]
 
-        field_changes = {}
+        changes = {}
 
-        for field in [
-            "display_name",
-            "eligible_for_bounty",
-            "eligible_for_submission",
-            "cvss_score",
-            "instruction",
-            "total_resolved_reports",
-        ]:
-            if old_item.get(field) != new_item.get(field):
-                field_changes[field] = {
-                    "old": old_item.get(field),
-                    "new": new_item.get(field),
-                }
+        if old_item.get("identifier") != new_item.get("identifier"):
+            changes["identifier"] = {
+                "old": old_item.get("identifier"),
+                "new": new_item.get("identifier"),
+            }
 
-        if field_changes:
-            changed.append(
+        if (
+            old_item.get("eligible_for_bounty") is False
+            and new_item.get("eligible_for_bounty") is True
+        ):
+            changes["eligible_for_bounty"] = {
+                "old": old_item.get("eligible_for_bounty"),
+                "new": new_item.get("eligible_for_bounty"),
+            }
+
+        if (
+            old_item.get("eligible_for_submission") is False
+            and new_item.get("eligible_for_submission") is True
+            and new_item.get("eligible_for_bounty") is True
+        ):
+            changes["eligible_for_submission"] = {
+                "old": old_item.get("eligible_for_submission"),
+                "new": new_item.get("eligible_for_submission"),
+            }
+
+        if changes:
+            paid_scope_changes.append(
                 {
-                    "identifier": identifier,
-                    "changes": field_changes,
+                    "identifier": new_item.get("identifier"),
+                    "old_identifier": old_item.get("identifier"),
+                    "changes": changes,
+                    "asset": new_item,
+                }
+            )
+
+        if old_item.get("total_resolved_reports") != new_item.get("total_resolved_reports"):
+            report_changes.append(
+                {
+                    "identifier": new_item.get("identifier"),
+                    "changes": {
+                        "total_resolved_reports": {
+                            "old": old_item.get("total_resolved_reports"),
+                            "new": new_item.get("total_resolved_reports"),
+                        }
+                    },
+                    "asset": new_item,
                 }
             )
 
     return {
-        "added": added,
-        "removed": removed,
-        "changed": changed,
+        "paid_scope": {
+            "added": added,
+            "removed": removed,
+            "changed": paid_scope_changes,
+        },
+        "reports": {
+            "changed": report_changes,
+        },
     }
 
-
+# Paid Scope Section 
 def print_diff(handle: str, diff: dict) -> None:
-    added = diff["added"]
-    removed = diff["removed"]
-    changed = diff["changed"]
+    paid_scope = diff["paid_scope"]
+
+    added = paid_scope["added"]
+    removed = paid_scope["removed"]
+    changed = paid_scope["changed"]
 
     if not added and not removed and not changed:
-        logging.info("[%s] No scope changes detected.", handle)
-        return
+        logging.info("[%s] No paid scope changes detected.", handle)
+    else:
+        logging.info("[%s] Paid scope changes detected.", handle)
 
-    logging.info("[%s] Scope changes detected.", handle)
+        if added:
+            logging.info("[%s] Added assets:", handle)
+            for item in added:
+                logging.info(
+                    "  + %s | bounty=%s | submission=%s | severity=%s",
+                    item["identifier"],
+                    item["eligible_for_bounty"],
+                    item["eligible_for_submission"],
+                    item["cvss_score"],
+                )
 
-    if added:
-        logging.info("[%s] Added assets:", handle)
-        for item in added:
+        if removed:
+            logging.info("[%s] Removed assets:", handle)
+            for item in removed:
+                logging.info(
+                    "  - %s | bounty=%s | submission=%s | severity=%s",
+                    item["identifier"],
+                    item["eligible_for_bounty"],
+                    item["eligible_for_submission"],
+                    item["cvss_score"],
+                )
+
+        if changed:
+            logging.info("[%s] Modified paid assets:", handle)
+            for item in changed:
+                logging.info("  * %s", item["identifier"])
+                for field, values in item["changes"].items():
+                    logging.info(
+                        "      %s: %r -> %r",
+                        field,
+                        values["old"],
+                        values["new"],
+                    )
+
+    report_changes = diff["reports"]["changed"]
+
+    if report_changes:
+        logging.info("[%s] Resolved report count changes:", handle)
+        for item in report_changes:
+            values = item["changes"]["total_resolved_reports"]
             logging.info(
-                "  + %s | bounty=%s | submission=%s | severity=%s",
+                "  * %s | resolved reports: %r -> %r",
                 item["identifier"],
-                item["eligible_for_bounty"],
-                item["eligible_for_submission"],
-                item["cvss_score"],
+                values["old"],
+                values["new"],
             )
-
-    if removed:
-        logging.info("[%s] Removed assets:", handle)
-        for item in removed:
-            logging.info(
-                "  - %s | bounty=%s | submission=%s | severity=%s",
-                item["identifier"],
-                item["eligible_for_bounty"],
-                item["eligible_for_submission"],
-                item["cvss_score"],
-            )
-
-    if changed:
-        logging.info("[%s] Changed assets:", handle)
-        for item in changed:
-            logging.info("  * %s", item["identifier"])
-            for field, values in item["changes"].items():
-                logging.info("      %s: %r -> %r", field, values["old"], values["new"])
 
 
 def process_target(handle: str) -> None:
@@ -164,8 +237,18 @@ def process_target(handle: str) -> None:
     diff = compare_snapshots(old_snapshot, new_snapshot)
     print_diff(handle, diff)
 
-    if diff["added"] or diff["removed"] or diff["changed"]:
-        send_discord_scope_notification(handle, diff)
+    paid_scope_diff = diff["paid_scope"]
+    reports_diff = diff["reports"]
+
+    if (
+        paid_scope_diff["added"]
+        or paid_scope_diff["removed"]
+        or paid_scope_diff["changed"]
+    ):
+        send_discord_scope_notification(handle, paid_scope_diff)
+
+    if reports_diff["changed"]:
+        send_discord_reports_notification(handle, reports_diff)
 
     logging.info("[%s] Renaming old current JSON to previous version: %s", handle, previous_file)
     shutil.copy2(current_file, previous_file)

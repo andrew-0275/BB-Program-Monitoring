@@ -6,6 +6,7 @@ import requests
 from config import (
     DISCORD_CHANGE_WEBHOOK_URL,
     DISCORD_LOG_WEBHOOK_URL,
+    DISCORD_BB_REPORTS_URL,
     DISCORD_TIMEOUT,
 )
 
@@ -29,28 +30,6 @@ def choose_embed_color(diff: dict) -> int:
     if diff["changed"]:
         return 0xFEE75C
     return 0x5865F2
-
-
-def calculate_change_severity(diff: dict) -> str:
-    if diff["removed"]:
-        return "CRITICAL"
-
-    for item in diff["changed"]:
-        changed_fields = set(item["changes"].keys())
-        if "eligible_for_bounty" in changed_fields:
-            return "CRITICAL"
-        if "eligible_for_submission" in changed_fields:
-            return "CRITICAL"
-        if "instruction" in changed_fields:
-            return "HIGH"
-
-    if diff["added"]:
-        return "HIGH"
-
-    if diff["changed"]:
-        return "MEDIUM"
-
-    return "LOW"
 
 
 def format_added(items: list[dict]) -> str:
@@ -122,13 +101,12 @@ def send_discord_scope_notification(handle: str, diff: dict) -> None:
     added_count = len(diff["added"])
     removed_count = len(diff["removed"])
     changed_count = len(diff["changed"])
-    severity = calculate_change_severity(diff)
 
     payload = {
         "username": "BB Scope Alerts",
         "embeds": [
             {
-                "title": f"🚨 {severity} — HackerOne Scope Change Detected",
+                "title": "🚨 HackerOne Paid Scope Change",
                 "url": f"https://hackerone.com/{handle}/policy_scopes",
                 "color": choose_embed_color(diff),
                 "fields": [
@@ -280,6 +258,11 @@ def send_program_discovery_notification(diff: dict) -> None:
                         "inline": False,
                     },
                     {
+                        "name": "HackerOne Paid Programs List",
+                        "value": "<https://hackerone.com/opportunities/all/search?bbp=true&ordering=Newest+programs>",
+                        "inline": False,
+                    },
+                    {
                         "name": "Targets File",
                         "value": f"`{diff.get('targets_file')}`",
                         "inline": False,
@@ -345,3 +328,83 @@ def send_target_error(handle: str, error: Exception) -> None:
     response.raise_for_status()
 
     logging.info("[%s] Discord target error alert sent.", handle)
+
+
+def format_report_changes(handle: str, items: list[dict]) -> str:
+    if not items:
+        return "None"
+
+    sections = []
+
+    for item in items[:10]:
+        asset = item.get("asset", {})
+        identifier = item.get("identifier") or asset.get("identifier") or "Unknown asset"
+
+        values = item["changes"]["total_resolved_reports"]
+        old = values["old"]
+        new = values["new"]
+
+        sections.append(
+            f"**{identifier}**\n"
+            f"Resolved Reports: `{old}` → `{new}`\n"
+            f"Type: `{asset.get('display_name', 'N/A')}`\n"
+            f"Bounty: {discord_bool(asset.get('eligible_for_bounty', False))}\n"
+            f"Submission: {discord_bool(asset.get('eligible_for_submission', False))}\n"
+            f"Severity: `{asset.get('cvss_score') or 'N/A'}`\n"
+            f"Policy: <https://hackerone.com/{handle}/policy_scopes>"
+        )
+
+    if len(items) > 10:
+        sections.append(f"...and {len(items) - 10} more report-count change(s).")
+
+    return "\n\n".join(sections)
+
+
+def send_discord_reports_notification(handle: str, diff: dict) -> None:
+    if not DISCORD_BB_REPORTS_URL:
+        logging.info("[%s] Discord BB reports webhook not configured. Skipping report alert.", handle)
+        return
+
+    changed = diff.get("changed", [])
+
+    if not changed:
+        return
+
+    policy_url = f"https://hackerone.com/{handle}/policy_scopes"
+
+    payload = {
+        "username": "BB Reports",
+        "embeds": [
+            {
+                "title": "📊 HackerOne Resolved Reports Changed",
+                "url": policy_url,
+                "color": 0x5865F2,
+                "fields": [
+                    {"name": "Program", "value": f"`{handle}`", "inline": True},
+                    {"name": "Platform", "value": "`HackerOne`", "inline": True},
+                    {"name": "Changed Assets", "value": str(len(changed)), "inline": True},
+                    {
+                        "name": "Report Count Changes",
+                        "value": format_report_changes(handle, changed)[:1024],
+                        "inline": False,
+                    },
+                    {
+                        "name": "Policy",
+                        "value": policy_url,
+                        "inline": False,
+                    },
+                ],
+                "footer": {"text": "HackerOne Resolved Reports Watcher"},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ],
+    }
+
+    response = requests.post(
+        DISCORD_BB_REPORTS_URL,
+        json=payload,
+        timeout=DISCORD_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    logging.info("[%s] Discord resolved-reports notification sent.", handle)

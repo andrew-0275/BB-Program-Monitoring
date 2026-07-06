@@ -172,6 +172,7 @@ def normalize_response(handle: str, response_data: dict) -> dict:
 
         normalized_scopes.append(
             {
+                "id": node.get("id") or "",
                 "identifier": node.get("identifier") or "",
                 "display_name": node.get("display_name") or "",
                 "eligible_for_bounty": bool(node.get("eligible_for_bounty")),
@@ -184,7 +185,13 @@ def normalize_response(handle: str, response_data: dict) -> dict:
             }
         )
 
-    normalized_scopes.sort(key=lambda item: item["identifier"].lower())
+    normalized_scopes.sort(
+        key=lambda item: (
+            item["identifier"].lower(),
+            item["display_name"].lower(),
+            item["id"],
+        )
+    )
 
     return {
         "platform": "hackerone",

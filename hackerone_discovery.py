@@ -22,6 +22,8 @@ PAGE_SIZE = 100
 SLEEP_RANGE = (1, 2)
 
 
+# Build GraphQL variables for HackerOne program discovery.
+# This filters to programs where the PROGRAM has offers_bounties=True.
 def build_variables(offset: int) -> dict:
     return {
         "size": PAGE_SIZE,
@@ -32,11 +34,6 @@ def build_variables(offset: int) -> dict:
                 "filter": [
                     {
                         "bool": {
-                            "must_not": {
-                                "term": {
-                                    "team_type": "Engagements::Assessment"
-                                }
-                            },
                             "should": [
                                 {
                                     "term": {
@@ -49,7 +46,12 @@ def build_variables(offset: int) -> dict:
                 ]
             }
         },
-        "sort": [{"field": "launched_at", "direction": "DESC"}],
+        "sort": [
+            {
+                "field": "launched_at",
+                "direction": "DESC",
+            }
+        ],
         "post_filters": {
             "my_programs": False,
             "bookmarked": False,
@@ -64,7 +66,7 @@ def fetch_page(session: requests.Session, query: str, offset: int) -> dict:
     payload = {
         "operationName": "DiscoveryQuery",
         "query": query,
-        "variables": build_variables(offset),
+        "variables": build_variables(offset), # Applies the offers_bounties = True discovery filter 
     }
 
     response = session.post(GRAPHQL_URL, json=payload, timeout=30)
@@ -155,6 +157,9 @@ def refresh_hackerone_program_targets() -> dict:
 
     old_handles = json.loads(current_snapshot_file.read_text(encoding="utf-8"))
 
+    # Compare current discovered bounty-program handles against the previous snapshot.
+    # added = programs newly appearing in the HackerOne bounty-program list.
+    # removed = programs no longer appearing in the HackerOne bounty-program list.
     added = sorted(set(handles) - set(old_handles))
     removed = sorted(set(old_handles) - set(handles))
 
