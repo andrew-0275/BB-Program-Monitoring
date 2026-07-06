@@ -1,0 +1,103 @@
+query DiscoveryQuery($query: OpportunitiesQuery!, $filter: QueryInput!, $from: Int, $size: Int, $sort: [SortInput!], $post_filters: OpportunitiesFilterInput) {
+  me {
+    id
+    ...OpportunityListMeElastic
+    __typename
+  }
+  opportunities_search(query: $query, filter: $filter, from: $from, size: $size, sort: $sort, post_filters: $post_filters) {
+    nodes {
+      ... on OpportunityDocument {
+        id
+        handle
+        state
+        __typename
+      }
+      ...OpportunityList
+      __typename
+    }
+    total_count
+    __typename
+  }
+}
+
+fragment OpportunityListMeElastic on User {
+  id
+  ...OpportunityCardMeElastic
+  __typename
+}
+
+fragment OpportunityCardMeElastic on User {
+  id
+  ...BookmarkMe
+  ...PrivateOpportunitiesMe
+  __typename
+}
+
+fragment BookmarkMe on User {
+  id
+  __typename
+}
+
+fragment PrivateOpportunitiesMe on User {
+  id
+  whitelisted_teams {
+    edges {
+      node {
+        id
+        _id
+        __typename
+      }
+      __typename
+    }
+    __typename
+  }
+  __typename
+}
+
+fragment OpportunityList on OpportunityDocument {
+  id
+  ...OpportunityCard
+  __typename
+}
+
+fragment OpportunityCard on OpportunityDocument {
+  id
+  team_id
+  name
+  handle
+  profile_picture
+  triage_active
+  publicly_visible_retesting
+  allows_private_disclosure
+  allows_bounty_splitting
+  launched_at
+  state
+  offers_bounties
+  last_updated_at
+  currency
+  team_type
+  minimum_bounty_table_value
+  maximum_bounty_table_value
+  cached_response_efficiency_percentage
+  first_response_time
+  structured_scope_stats
+  show_response_efficiency_indicator
+  submission_state
+  resolved_report_count
+  campaign {
+    id
+    campaign_type
+    start_date
+    end_date
+    critical
+    target_audience
+    __typename
+  }
+  gold_standard
+  awarded_report_count
+  awarded_reporter_count
+  h1_clear
+  idv
+  list_opportunity
+  __typename
+}

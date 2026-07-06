@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from config import (
-    DATA_DIR,
+    HACKERONE_SCOPE_DIR,
     LOG_DIR,
     LOG_FILE,
     MAX_DELAY_SECONDS,
@@ -17,13 +17,16 @@ from config import (
     TARGETS_FILE,
 )
 from discord_notify import (
-    send_discord_notification,
+    send_discord_scope_notification,
+    send_program_discovery_notification,
     send_run_error,
     send_run_success,
     send_target_error,
 )
 from graphql import fetch_scopes, normalize_response
 from watchers.hackerone import load_targets
+
+from hackerone_discovery import refresh_hackerone_program_targets
 
 
 def setup_logging() -> None:
@@ -136,10 +139,10 @@ def print_diff(handle: str, diff: dict) -> None:
 
 
 def process_target(handle: str) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    HACKERONE_SCOPE_DIR.mkdir(parents=True, exist_ok=True)
 
-    current_file = DATA_DIR / f"{handle}.json"
-    previous_file = DATA_DIR / f"{handle}_previous_version.json"
+    current_file = HACKERONE_SCOPE_DIR / f"{handle}.json"
+    previous_file = HACKERONE_SCOPE_DIR / f"{handle}_previous_version.json"
 
     logging.info("=" * 80)
     logging.info("Processing HackerOne target: %s", handle)
@@ -162,7 +165,7 @@ def process_target(handle: str) -> None:
     print_diff(handle, diff)
 
     if diff["added"] or diff["removed"] or diff["changed"]:
-        send_discord_notification(handle, diff)
+        send_discord_scope_notification(handle, diff)
 
     logging.info("[%s] Renaming old current JSON to previous version: %s", handle, previous_file)
     shutil.copy2(current_file, previous_file)
@@ -174,10 +177,41 @@ def process_target(handle: str) -> None:
 def main() -> int:
     setup_logging()
 
-    logging.info("HackerOne Scope Watcher started.")
+    logging.info("Program Watcher Started.")
     logging.info("Working directory: %s", Path.cwd())
     logging.info("Targets file: %s", TARGETS_FILE)
     logging.info("Log file: %s", LOG_FILE)
+
+
+    logging.info("=" * 80)
+    logging.info("Phase 1: Discovering and verifying HackerOne bounty programs...")
+
+    try:
+        discovery_diff = refresh_hackerone_program_targets()
+
+        logging.info(
+            "Phase 1 complete. Old total=%s Current total=%s Added=%s Removed=%s",
+            discovery_diff["old_total"],
+            discovery_diff["total"],
+            len(discovery_diff["added"]),
+            len(discovery_diff["removed"]),
+        )
+
+        if discovery_diff["added"] or discovery_diff["removed"]:
+            send_program_discovery_notification(discovery_diff)
+
+    except Exception as exc:
+        logging.exception("Phase 1 failed: HackerOne program discovery error: %s", exc)
+
+        try:
+            send_run_error(total_targets=0, failures=1)
+        except Exception as discord_exc:
+            logging.exception("Failed to send Discord discovery error alert: %s", discord_exc)
+
+        return 1
+
+    logging.info("=" * 80)
+    logging.info("Phase 2: Loading targets and checking HackerOne scope changes...")
 
     try:
         targets = load_targets()
@@ -205,7 +239,18 @@ def main() -> int:
 
     failures = 0
 
-    for index, handle in enumerate(targets):
+    total_targets = len(targets)
+
+    for index, handle in enumerate(targets, start=1):
+        progress_percent = (index / total_targets) * 100
+
+        logging.info(
+            "Progress: target %s/%s (%.1f%% complete)",
+            index,
+            total_targets,
+            progress_percent,
+        )
+
         try:
             process_target(handle)
         except Exception as exc:
@@ -221,7 +266,7 @@ def main() -> int:
                     discord_exc,
                 )
 
-        if index < len(targets) - 1:
+        if index < total_targets:
             delay = random.uniform(MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
             logging.info("Sleeping %.1f seconds before next target...", delay)
             time.sleep(delay)

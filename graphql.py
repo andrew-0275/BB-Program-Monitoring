@@ -5,7 +5,6 @@ import requests
 
 from config import GRAPHQL_URL, REQUEST_TIMEOUT
 
-
 class HackerOneGraphQLError(RuntimeError):
     def __init__(
         self,
@@ -22,7 +21,7 @@ class HackerOneGraphQLError(RuntimeError):
         super().__init__(message)
 
 
-QUERY = """
+GRAPHQL_SCOPE_QUERY = """
 query PolicySearchStructuredScopesQuery(
   $handle: String!,
   $searchString: String,
@@ -89,7 +88,7 @@ def fetch_scopes(handle: str) -> dict:
                 "direction": "DESC",
             },
         },
-        "query": QUERY,
+        "query": GRAPHQL_SCOPE_QUERY,
     }
 
     headers = {

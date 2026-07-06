@@ -8,7 +8,11 @@ load_dotenv()
 
 TARGETS_FILE = Path("hackerone_targets.txt")
 
-DATA_DIR = Path("data") / "hackerone"
+DATA_DIR = Path("data")
+HACKERONE_DATA_DIR = DATA_DIR / "hackerone"
+HACKERONE_SCOPE_DIR = HACKERONE_DATA_DIR / "scopes"
+HACKERONE_DISCOVERY_DIR = HACKERONE_DATA_DIR / "discovery"
+
 LOG_DIR = Path("logs")
 LOG_FILE = LOG_DIR / "hackerone_scope_watcher.log"
 
@@ -20,5 +24,5 @@ DISCORD_LOG_WEBHOOK_URL = os.getenv("DISCORD_LOG_WEBHOOK_URL")
 REQUEST_TIMEOUT = 30
 DISCORD_TIMEOUT = 15
 
-MIN_DELAY_SECONDS = 3
-MAX_DELAY_SECONDS = 8
+MIN_DELAY_SECONDS = 1
+MAX_DELAY_SECONDS = 2

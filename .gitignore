@@ -2,6 +2,7 @@
 
 logs/
 data/
+oldnotes/ 
 
 __pycache__/
 *.py[cod]
@@ -17,3 +18,4 @@ venv/
 main_O.py
 graphQL endpoint.md
 .env
+hacknotes.md

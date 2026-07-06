@@ -6,7 +6,9 @@ __pycache__
 
 logs/
 data/
+oldnotes/
 
 main_O.py
 graphQL endpoint.md
 .env
+hacknotes.md

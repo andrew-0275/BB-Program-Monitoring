@@ -114,7 +114,7 @@ def format_changed(items: list[dict]) -> str:
     return "\n\n".join(sections)
 
 
-def send_discord_notification(handle: str, diff: dict) -> None:
+def send_discord_scope_notification(handle: str, diff: dict) -> None:
     if not DISCORD_CHANGE_WEBHOOK_URL:
         logging.info("[%s] Discord change webhook not configured. Skipping alert.", handle)
         return
@@ -229,6 +229,77 @@ def send_run_error(total_targets: int, failures: int) -> None:
     response.raise_for_status()
 
     logging.info("Discord run error alert sent.")
+
+
+def format_program_handles(items: list[str], symbol: str) -> str:
+    if not items:
+        return "None"
+
+    lines = [
+        f"{symbol} [`{handle}`](https://hackerone.com/{handle}?type=team)"
+        for handle in items[:20]
+    ]
+
+    if len(items) > 20:
+        lines.append(f"...and {len(items) - 20} more program(s).")
+
+    return "\n".join(lines)
+
+
+def send_program_discovery_notification(diff: dict) -> None:
+    if not DISCORD_CHANGE_WEBHOOK_URL:
+        logging.info("Discord change webhook not configured. Skipping program discovery alert.")
+        return
+
+    added = diff.get("added", [])
+    removed = diff.get("removed", [])
+
+    if not added and not removed:
+        return
+
+    color = 0x57F287 if added and not removed else 0xED4245 if removed and not added else 0xFAA61A
+
+    payload = {
+        "username": "BB Scope Alerts",
+        "embeds": [
+            {
+                "title": "📡 HackerOne Program Discovery Change",
+                "color": color,
+                "fields": [
+                    {"name": "Platform", "value": "`HackerOne`", "inline": True},
+                    {"name": "Old Total", "value": str(diff.get("old_total")), "inline": True},
+                    {"name": "Current Total", "value": str(diff.get("total")), "inline": True},
+                    {
+                        "name": "🟢 New Programs",
+                        "value": format_program_handles(added, "+")[:1024],
+                        "inline": False,
+                    },
+                    {
+                        "name": "🔴 Removed Programs",
+                        "value": format_program_handles(removed, "-")[:1024],
+                        "inline": False,
+                    },
+                    {
+                        "name": "Targets File",
+                        "value": f"`{diff.get('targets_file')}`",
+                        "inline": False,
+                    },
+                ],
+                "footer": {"text": "HackerOne Program Discovery"},
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ],
+    }
+
+    response = requests.post(
+        DISCORD_CHANGE_WEBHOOK_URL,
+        json=payload,
+        timeout=DISCORD_TIMEOUT,
+    )
+    response.raise_for_status()
+
+    logging.info("Discord program discovery notification sent.")
+    
 
 def send_target_error(handle: str, error: Exception) -> None:
     if not DISCORD_CHANGE_WEBHOOK_URL:
