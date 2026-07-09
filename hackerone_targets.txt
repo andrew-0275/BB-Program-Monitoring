@@ -1,3 +1,4 @@
+https://hackerone.com/codacy/policy_scopes
 https://hackerone.com/agoda-public/policy_scopes
 https://hackerone.com/anthropic/policy_scopes
 https://hackerone.com/coupang_tw/policy_scopes
@@ -135,6 +136,7 @@ https://hackerone.com/tinder/policy_scopes
 https://hackerone.com/xvideos/policy_scopes
 https://hackerone.com/elastic/policy_scopes
 https://hackerone.com/stripe/policy_scopes
+https://hackerone.com/homebargains/policy_scopes
 https://hackerone.com/urbancompany/policy_scopes
 https://hackerone.com/reddit/policy_scopes
 https://hackerone.com/coinspot/policy_scopes

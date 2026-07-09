@@ -7,17 +7,13 @@ import shutil
 
 import requests
 from config import (
-    GRAPHQL_URL,
+    HACKERONE_GRAPHQL_BASE_URL,
     HACKERONE_DISCOVERY_DIR,
-    TARGETS_FILE,
+    HACKERONE_TARGETS_FILE,
+    HACKERONE_DISCOVERY_QUERY_FILE,
 )
 
-QUERY_FILE = Path("graphql/discovery_query.graphql")
-
-DISCOVERY_DIR = Path("data/hackerone/discovery")
-OUT_FILE = Path("hackerone_targets.txt")
-SNAPSHOT_FILE = DISCOVERY_DIR / "hackerone_programs_snapshot.json"
-
+# GraphQL API Call Config
 PAGE_SIZE = 100
 SLEEP_RANGE = (1, 2)
 
@@ -69,7 +65,7 @@ def fetch_page(session: requests.Session, query: str, offset: int) -> dict:
         "variables": build_variables(offset), # Applies the offers_bounties = True discovery filter 
     }
 
-    response = session.post(GRAPHQL_URL, json=payload, timeout=30)
+    response = session.post(HACKERONE_GRAPHQL_BASE_URL, json=payload, timeout=30)
 
     if response.status_code == 429:
         logging.warning("Rate limited during program discovery. Sleeping 90 seconds.")
@@ -92,13 +88,8 @@ def load_old_snapshot() -> list[str]:
     return json.loads(SNAPSHOT_FILE.read_text(encoding="utf-8"))
 
 
-def refresh_hackerone_program_targets() -> dict:
-    HACKERONE_DISCOVERY_DIR.mkdir(parents=True, exist_ok=True)
-
-    current_snapshot_file = HACKERONE_DISCOVERY_DIR / "hackerone_programs_snapshot.json"
-    previous_snapshot_file = HACKERONE_DISCOVERY_DIR / "hackerone_programs_previous_version.json"
-
-    query = QUERY_FILE.read_text(encoding="utf-8")
+def fetch_all_bounty_programs() -> list[str]:
+    query = HACKERONE_DISCOVERY_QUERY_FILE.read_text(encoding="utf-8")
 
     session = requests.Session()
     session.headers.update(
@@ -111,7 +102,7 @@ def refresh_hackerone_program_targets() -> dict:
         }
     )
 
-    handles = []
+    current_program_handles = []
     total = None
     offset = 0
 
@@ -124,64 +115,91 @@ def refresh_hackerone_program_targets() -> dict:
 
         for node in search.get("nodes", []):
             handle = node.get("handle")
-            if handle and handle not in handles:
-                handles.append(handle)
+            if handle and handle not in current_program_handles:
+                current_program_handles.append(handle)
 
         offset += PAGE_SIZE
         time.sleep(random.uniform(*SLEEP_RANGE))
 
-    urls = [f"https://hackerone.com/{handle}/policy_scopes" for handle in handles]
-    TARGETS_FILE.write_text("\n".join(urls) + "\n", encoding="utf-8")
+    return current_program_handles
+
+
+# Function write hackerone_targets.txt with all currently fetched programs everytime regardless of diff
+# Bundled with full URL and / policy_scopes
+def write_hackerone_targets_file(current_program_handles: list[str]) -> None:
+    urls = [f"https://hackerone.com/{handle}/policy_scopes" for handle in current_program_handles]
+    HACKERONE_TARGETS_FILE.write_text("\n".join(urls) + "\n", encoding="utf-8")
+
+
+# 1. Read the previous snapshot
+# 2. Compare it to the new porgram handles
+# 3. Saving the snapshots
+# 4. Returning the diff
+def compare_program_snapshots(current_program_handles: list[str]) -> dict:
+    current_snapshot_file = HACKERONE_DISCOVERY_DIR / "hackerone_programs_snapshot.json"
+    previous_snapshot_file = HACKERONE_DISCOVERY_DIR / "hackerone_programs_previous_version.json"
 
     if not current_snapshot_file.exists():
         logging.info("[Discovery] No previous current JSON exists.")
         logging.info("[Discovery] Saving first snapshot to: %s", current_snapshot_file)
 
+        # Writes/saves first snapshot history with the all program handles
         current_snapshot_file.write_text(
-            json.dumps(handles, indent=2),
+            json.dumps(current_program_handles, indent=2),
             encoding="utf-8",
         )
 
         return {
             "platform": "hackerone",
-            "total": len(handles),
+            "total": len(current_program_handles),
             "old_total": 0,
-            "added": handles,
+            "added": current_program_handles,
             "removed": [],
-            "targets_file": str(TARGETS_FILE),
+            "HACKERONE_TARGETS_FILE": str(HACKERONE_TARGETS_FILE),
             "snapshot_file": str(current_snapshot_file),
             "previous_snapshot_file": str(previous_snapshot_file),
         }
 
     logging.info("[Discovery] Existing JSON found. Beginning comparison.")
 
-    old_handles = json.loads(current_snapshot_file.read_text(encoding="utf-8"))
+    stored_program_handles = json.loads(current_snapshot_file.read_text(encoding="utf-8"))
 
     # Compare current discovered bounty-program handles against the previous snapshot.
-    # added = programs newly appearing in the HackerOne bounty-program list.
-    # removed = programs no longer appearing in the HackerOne bounty-program list.
-    added = sorted(set(handles) - set(old_handles))
-    removed = sorted(set(old_handles) - set(handles))
+    added = sorted(set(current_program_handles) - set(stored_program_handles)) # in current HackerOne list, but not in old snapshot
+    removed = sorted(set(stored_program_handles) - set(current_program_handles)) # in old snapshot, but not in current HackerOne list
 
     logging.info(
-        "[Discovery] Renaming old current JSON to previous version: %s",
+        "[Discovery] Saving already-stored snapshot as previous version: %s",
         previous_snapshot_file,
     )
     shutil.copy2(current_snapshot_file, previous_snapshot_file)
 
-    logging.info("[Discovery] Saving new current JSON: %s", current_snapshot_file)
+    logging.info(
+        "[Discovery] Replacing the disk-stored snapshot with all the fresh programs: %s",
+        current_snapshot_file,
+    )
+    # Replaces the disk-stored snapshot file with all the fetched handle (even with no change)
+    # file size is tiny so cost is negligible 
     current_snapshot_file.write_text(
-        json.dumps(handles, indent=2),
+        json.dumps(current_program_handles, indent=2),
         encoding="utf-8",
     )
 
     return {
         "platform": "hackerone",
-        "total": len(handles),
-        "old_total": len(old_handles),
+        "total": len(current_program_handles),
+        "old_total": len(stored_program_handles),
         "added": added,
         "removed": removed,
-        "targets_file": str(TARGETS_FILE),
+        "HACKERONE_TARGETS_FILE": str(HACKERONE_TARGETS_FILE),
         "snapshot_file": str(current_snapshot_file),
         "previous_snapshot_file": str(previous_snapshot_file),
     }
+
+
+def discover_hackerone_bounty_programs() -> dict:
+    HACKERONE_DISCOVERY_DIR.mkdir(parents=True, exist_ok=True)
+
+    current_program_handles = fetch_all_bounty_programs()
+    write_hackerone_targets_file(current_program_handles) # Rewrite hackerone_targets.txt with all currently fetched programs everytime
+    return compare_program_snapshots(current_program_handles)

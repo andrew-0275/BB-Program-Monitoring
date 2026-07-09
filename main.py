@@ -7,14 +7,13 @@ import shutil
 import sys
 import time
 from pathlib import Path
+import argparse
 
 from config import (
     HACKERONE_SCOPE_DIR,
     LOG_DIR,
     LOG_FILE,
-    MAX_DELAY_SECONDS,
-    MIN_DELAY_SECONDS,
-    TARGETS_FILE,
+    HACKERONE_TARGETS_FILE,
 )
 from discord_notify import (
     send_discord_scope_notification,
@@ -24,10 +23,25 @@ from discord_notify import (
     send_run_success,
     send_target_error,
 )
-from graphql import fetch_scopes, normalize_response
-from watchers.hackerone import load_targets
+from hackerone_graphql import fetch_hackerone_scopes, normalize_response
+from watchers.hackerone import load_hackerone_targets
 
-from hackerone_discovery import refresh_hackerone_program_targets
+from hackerone_discovery import discover_hackerone_bounty_programs
+
+
+# Main() delay config
+MIN_DELAY_SECONDS = 1
+MAX_DELAY_SECONDS = 2
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--no-alerts",
+        action="store_true",
+        help="Run normally but do not send Discord notifications.",
+    )
+    return parser.parse_args()
 
 
 def setup_logging() -> None:
@@ -53,6 +67,9 @@ def save_json(path: Path, data: dict) -> None:
         encoding="utf-8",
     )
 
+# identifier is the key
+# changed identifier usually becomes a removed old / added new asset, not a "changed" item. 
+# Would alert because paid added/removed assets are included in "added = [new_map[k]"
 def scope_key(item: dict) -> str:
     return f"{item.get('identifier', '')}|{item.get('display_name', '')}"
 
@@ -70,6 +87,10 @@ def compare_snapshots(old: dict, new: dict) -> dict:
     old_map = {scope_key(item): item for item in old.get("scopes", [])}
     new_map = {scope_key(item): item for item in new.get("scopes", [])}
 
+    # First Check - A New Asset was identified as either removed or added
+    # old: api.example.com - new: api-v2.example.co
+    # changed identifier usually becomes a removed old / added new asset, not a "changed" item. 
+    # Would alert because paid added/removed assets are included in "added = [new_map[k]"
     added = [
         new_map[k]
         for k in sorted(set(new_map) - set(old_map))
@@ -90,12 +111,7 @@ def compare_snapshots(old: dict, new: dict) -> dict:
 
         changes = {}
 
-        if old_item.get("identifier") != new_item.get("identifier"):
-            changes["identifier"] = {
-                "old": old_item.get("identifier"),
-                "new": new_item.get("identifier"),
-            }
-
+        # Second Check #1 - Already existing asset became bounty-eligible
         if (
             old_item.get("eligible_for_bounty") is False
             and new_item.get("eligible_for_bounty") is True
@@ -104,7 +120,7 @@ def compare_snapshots(old: dict, new: dict) -> dict:
                 "old": old_item.get("eligible_for_bounty"),
                 "new": new_item.get("eligible_for_bounty"),
             }
-
+        # Second Check #2 - Already existing asset became bounty-eligible
         if (
             old_item.get("eligible_for_submission") is False
             and new_item.get("eligible_for_submission") is True
@@ -124,7 +140,7 @@ def compare_snapshots(old: dict, new: dict) -> dict:
                     "asset": new_item,
                 }
             )
-
+        # Third check - New reports added to an asset
         if old_item.get("total_resolved_reports") != new_item.get("total_resolved_reports"):
             report_changes.append(
                 {
@@ -210,8 +226,9 @@ def print_diff(handle: str, diff: dict) -> None:
                 values["new"],
             )
 
-
-def process_target(handle: str) -> None:
+# Function to process each target 
+# 1. Hackerone - Run GraphQL API call fetch_hackerone_scopes() for each handle
+def process_target(handle: str, alerts_enabled: bool) -> None:
     HACKERONE_SCOPE_DIR.mkdir(parents=True, exist_ok=True)
 
     current_file = HACKERONE_SCOPE_DIR / f"{handle}.json"
@@ -220,7 +237,7 @@ def process_target(handle: str) -> None:
     logging.info("=" * 80)
     logging.info("Processing HackerOne target: %s", handle)
 
-    response_data = fetch_scopes(handle)
+    response_data = fetch_hackerone_scopes(handle)
     new_snapshot = normalize_response(handle, response_data)
 
     logging.info("[%s] Current fetched scope count: %s", handle, len(new_snapshot["scopes"]))
@@ -234,20 +251,19 @@ def process_target(handle: str) -> None:
     logging.info("[%s] Existing JSON found. Beginning comparison.", handle)
 
     old_snapshot = load_json(current_file)
-    diff = compare_snapshots(old_snapshot, new_snapshot)
+    diff = compare_snapshots(old_snapshot, new_snapshot) # compare_snapshots function
     print_diff(handle, diff)
 
     paid_scope_diff = diff["paid_scope"]
     reports_diff = diff["reports"]
 
-    if (
+    if alerts_enabled and (
         paid_scope_diff["added"]
         or paid_scope_diff["removed"]
-        or paid_scope_diff["changed"]
     ):
         send_discord_scope_notification(handle, paid_scope_diff)
 
-    if reports_diff["changed"]:
+    if alerts_enabled and reports_diff["changed"]:
         send_discord_reports_notification(handle, reports_diff)
 
     logging.info("[%s] Renaming old current JSON to previous version: %s", handle, previous_file)
@@ -258,63 +274,73 @@ def process_target(handle: str) -> None:
 
 
 def main() -> int:
+
+    args = parse_args()
+    alerts_enabled = not args.no_alerts # if python main.py --no-alerts then alerts_enabled = False
     setup_logging()
 
     logging.info("Program Watcher Started.")
     logging.info("Working directory: %s", Path.cwd())
-    logging.info("Targets file: %s", TARGETS_FILE)
+    logging.info("Hackerone targets file: %s", HACKERONE_TARGETS_FILE)
     logging.info("Log file: %s", LOG_FILE)
 
-
+    # Phase 1: Discover and verify HackerOne bounty programs
     logging.info("=" * 80)
     logging.info("Phase 1: Discovering and verifying HackerOne bounty programs...")
 
     try:
-        discovery_diff = refresh_hackerone_program_targets()
+        # Prim Function from hackerone_discovery.py - Run and save output to discovery_diff
+        # Which returns of dictionary of report changes
+        discovery_diff = discover_hackerone_bounty_programs()
 
         logging.info(
             "Phase 1 complete. Old total=%s Current total=%s Added=%s Removed=%s",
             discovery_diff["old_total"],
             discovery_diff["total"],
-            len(discovery_diff["added"]),
+            len(discovery_diff["added"]), # Lists
             len(discovery_diff["removed"]),
         )
 
-        if discovery_diff["added"] or discovery_diff["removed"]:
+        if alerts_enabled and (discovery_diff["added"] or discovery_diff["removed"]):
             send_program_discovery_notification(discovery_diff)
 
     except Exception as exc:
         logging.exception("Phase 1 failed: HackerOne program discovery error: %s", exc)
 
-        try:
-            send_run_error(total_targets=0, failures=1)
-        except Exception as discord_exc:
-            logging.exception("Failed to send Discord discovery error alert: %s", discord_exc)
+        if alerts_enabled:
+            try:
+                send_run_error(total_targets=0, failures=1)
+            except Exception as discord_exc:
+                logging.exception("Failed to send Discord discovery error alert: %s", discord_exc)
 
         return 1
 
     logging.info("=" * 80)
-    logging.info("Phase 2: Loading targets and checking HackerOne scope changes...")
 
+    # Phase 2: Check individual HackerOne scope changes
+    logging.info("Phase 2: Loading targets and checking HackerOne scope changes...")
+    
     try:
-        targets = load_targets()
+        targets = load_hackerone_targets() # Pull from /Watchers.hackerone.py
     except Exception as exc:
         logging.exception("Failed to load targets: %s", exc)
 
-        try:
-            send_run_error(total_targets=0, failures=1)
-        except Exception as discord_exc:
-            logging.exception("Failed to send Discord startup error alert: %s", discord_exc)
+        if alerts_enabled:
+            try:
+                send_run_error(total_targets=0, failures=1)
+            except Exception as discord_exc:
+                logging.exception("Failed to send Discord startup error alert: %s", discord_exc)
 
         return 1
 
     if not targets:
-        logging.error("No targets found in %s", TARGETS_FILE)
+        logging.error("No targets found in %s", HACKERONE_TARGETS_FILE)
 
-        try:
-            send_run_error(total_targets=0, failures=1)
-        except Exception as discord_exc:
-            logging.exception("Failed to send Discord no-targets error alert: %s", discord_exc)
+        if alerts_enabled:
+            try:
+                send_run_error(total_targets=0, failures=1)
+            except Exception as discord_exc:
+                logging.exception("Failed to send Discord no-targets error alert: %s", discord_exc)
 
         return 1
 
@@ -324,6 +350,7 @@ def main() -> int:
 
     total_targets = len(targets)
 
+    # Main Loop to iterate over the list of string handles
     for index, handle in enumerate(targets, start=1):
         progress_percent = (index / total_targets) * 100
 
@@ -333,21 +360,23 @@ def main() -> int:
             total_targets,
             progress_percent,
         )
-
         try:
-            process_target(handle)
+            process_target(handle, alerts_enabled) # process_target function iteration
         except Exception as exc:
             failures += 1
             logging.exception("[%s] Failed: %s", handle, exc)
-
-            try:
-                send_target_error(handle, exc)
-            except Exception as discord_exc:
-                logging.exception(
-                    "[%s] Failed to send Discord target error alert: %s",
-                    handle,
-                    discord_exc,
-                )
+            
+            
+            if alerts_enabled:
+                try:
+                    
+                    send_target_error(handle, exc)
+                except Exception as discord_exc:
+                    logging.exception(
+                        "[%s] Failed to send Discord target error alert: %s",
+                        handle,
+                        discord_exc,
+                    )
 
         if index < total_targets:
             delay = random.uniform(MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
@@ -374,13 +403,14 @@ def main() -> int:
 
     discord_log_line = formatter.format(record)
 
-    try:
-        if failures == 0:
-            send_run_success(discord_log_line)
-        else:
-            send_run_error(len(targets), failures)
-    except Exception as exc:
-        logging.exception("Failed to send Discord run status: %s", exc)
+    if alerts_enabled:
+        try:
+            if failures == 0:
+                send_run_success(discord_log_line)
+            else:
+                send_run_error(len(targets), failures)
+        except Exception as exc:
+            logging.exception("Failed to send Discord run status: %s", exc)
 
     return 1 if failures else 0
 

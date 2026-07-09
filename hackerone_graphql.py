@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import requests
 
-from config import GRAPHQL_URL, REQUEST_TIMEOUT
+from config import HACKERONE_GRAPHQL_BASE_URL
 
 class HackerOneGraphQLError(RuntimeError):
     def __init__(
@@ -15,10 +15,24 @@ class HackerOneGraphQLError(RuntimeError):
     ):
         self.handle = handle
         self.policy_url = f"https://hackerone.com/{handle}/policy_scopes"
-        self.graphql_url = GRAPHQL_URL
+        self.graphql_url = HACKERONE_GRAPHQL_BASE_URL
         self.status_code = status_code
         self.response_text = response_text
         super().__init__(message)
+
+
+# HackerOne Policy Scopes GUI -> GraphQL/JSON field mapping
+#
+# GUI column / label                         -> JSON field
+# ------------------------------------------------------------------
+# Asset name                                -> identifier
+# Type, e.g. Wildcard, URL, Domain, API      -> display_name
+# Description / instruction text             -> instruction
+# Coverage, e.g. In scope / Out of scope     -> eligible_for_submission
+# Max severity                               -> cvss_score
+# Bounty                                     -> eligible_for_bounty
+# Last update                                -> updated_at
+# Resolved Reports                           -> total_resolved_reports
 
 
 GRAPHQL_SCOPE_QUERY = """
@@ -69,8 +83,10 @@ query PolicySearchStructuredScopesQuery(
 }
 """
 
+# GraphQL API Call config
+REQUEST_TIMEOUT = 30
 
-def fetch_scopes(handle: str) -> dict:
+def fetch_hackerone_scopes(handle: str) -> dict:
     payload = {
         "operationName": "PolicySearchStructuredScopesQuery",
         "variables": {
@@ -102,7 +118,7 @@ def fetch_scopes(handle: str) -> dict:
 
     try:
         response = requests.post(
-            GRAPHQL_URL,
+            HACKERONE_GRAPHQL_BASE_URL,
             headers=headers,
             json=payload,
             timeout=REQUEST_TIMEOUT,

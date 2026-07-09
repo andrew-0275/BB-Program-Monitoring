@@ -8,10 +8,9 @@ Project developed in Python that monitors and alerts for new bug bounty programs
 
 ## Features
 
-- Automatically discovers public bounty programs
+- Automatically discovers public bounty programs dynamically
 - Detects newly added and removed programs
 - Monitors scope changes for tracked programs
-- Compares current and previous JSON snapshots
 - Sends Discord notifications for detected changes
 
 ## Workflow
@@ -23,7 +22,7 @@ HackerOne Discovery GraphQL
         ↓
 Retrieve public bounty programs
         ↓
-Compare previous snapshot
+Compare to previous snapshot
         ↓
 Detect new / removed programs
         ↓
@@ -37,8 +36,6 @@ hackerone_targets.txt
         ↓
 Fetch scopes via GraphQL
         ↓
-Normalize response
-        ↓
 Compare previous snapshot
         ↓
 Detect scope changes
@@ -47,3 +44,19 @@ Send Discord alert
         ↓
 Save new snapshot
 ```
+
+## Usage
+
+Run the project normally:
+
+```bash
+python main.py
+```
+
+Run the project without sending Discord webhook notifications:
+
+```bash
+python main.py --no-alerts
+```
+
+`--no-alerts` disables all Discord notifications while still performing program discovery, scope monitoring, comparisons, and snapshot updates. Useful for local development and testing.

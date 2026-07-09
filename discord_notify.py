@@ -23,16 +23,15 @@ def truncate(value, limit: int = 900) -> str:
 def choose_embed_color(diff: dict) -> int:
     if diff["removed"]:
         return 0xED4245
-    if diff["added"] and diff["changed"]:
-        return 0xFAA61A
     if diff["added"]:
         return 0x57F287
-    if diff["changed"]:
-        return 0xFEE75C
     return 0x5865F2
 
+def format_instruction(item: dict, limit: int = 350) -> str:
+    instruction = truncate(item.get("instruction", ""), limit)
+    return instruction if instruction else "N/A"
 
-def format_added(items: list[dict]) -> str:
+def format_scope_added(items: list[dict]) -> str:
     if not items:
         return "None"
 
@@ -45,6 +44,7 @@ def format_added(items: list[dict]) -> str:
             f"Bounty: {discord_bool(item['eligible_for_bounty'])}\n"
             f"Submission: {discord_bool(item['eligible_for_submission'])}\n"
             f"Severity: {item['cvss_score'] or 'N/A'}\n"
+            f"Instruction: {format_instruction(item)}\n"
             f"```"
         )
 
@@ -54,43 +54,27 @@ def format_added(items: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def format_removed(items: list[dict]) -> str:
+def format_scope_removed(items: list[dict]) -> str:
     if not items:
         return "None"
 
-    lines = [f"• `{item['identifier']}`" for item in items[:12]]
+    lines = []
 
-    if len(items) > 12:
-        lines.append(f"...and {len(items) - 12} more removed item(s).")
+    for item in items[:8]:
+        lines.append(
+            f"```text\n"
+            f"{item['identifier']}\n"
+            f"Bounty: {discord_bool(item['eligible_for_bounty'])}\n"
+            f"Submission: {discord_bool(item['eligible_for_submission'])}\n"
+            f"Severity: {item['cvss_score'] or 'N/A'}\n"
+            f"Instruction: {format_instruction(item)}\n"
+            f"```"
+        )
+
+    if len(items) > 8:
+        lines.append(f"...and {len(items) - 8} more removed item(s).")
 
     return "\n".join(lines)
-
-
-def format_changed(items: list[dict]) -> str:
-    if not items:
-        return "None"
-
-    sections = []
-
-    for item in items[:5]:
-        lines = [f"**`{item['identifier']}`**"]
-
-        for field, values in item["changes"].items():
-            old = truncate(values["old"], 300)
-            new = truncate(values["new"], 300)
-
-            lines.append(
-                f"`{field}`\n"
-                f"Old: `{old}`\n"
-                f"New: `{new}`"
-            )
-
-        sections.append("\n".join(lines))
-
-    if len(items) > 5:
-        sections.append(f"...and {len(items) - 5} more modified item(s).")
-
-    return "\n\n".join(sections)
 
 
 def send_discord_scope_notification(handle: str, diff: dict) -> None:
@@ -100,7 +84,6 @@ def send_discord_scope_notification(handle: str, diff: dict) -> None:
 
     added_count = len(diff["added"])
     removed_count = len(diff["removed"])
-    changed_count = len(diff["changed"])
 
     payload = {
         "username": "BB Scope Alerts",
@@ -117,23 +100,17 @@ def send_discord_scope_notification(handle: str, diff: dict) -> None:
                         "value": (
                             f"🟢 Added: **{added_count}**\n"
                             f"🔴 Removed: **{removed_count}**\n"
-                            f"🟡 Modified: **{changed_count}**"
                         ),
                         "inline": False,
                     },
                     {
                         "name": "🟢 Added",
-                        "value": format_added(diff["added"])[:1024],
+                        "value": format_scope_added(diff["added"])[:1024],
                         "inline": False,
                     },
                     {
                         "name": "🔴 Removed",
-                        "value": format_removed(diff["removed"])[:1024],
-                        "inline": False,
-                    },
-                    {
-                        "name": "🟡 Modified",
-                        "value": format_changed(diff["changed"])[:1024],
+                        "value": format_scope_removed(diff["removed"])[:1024],
                         "inline": False,
                     },
                     {
