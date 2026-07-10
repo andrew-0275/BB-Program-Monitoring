@@ -26,7 +26,7 @@ class HackerOneGraphQLError(RuntimeError):
 # GUI column / label                         -> JSON field
 # ------------------------------------------------------------------
 # Asset name                                -> identifier
-# Type, e.g. Wildcard, URL, Domain, API      -> display_name
+# Type, e.g. Wildcard, URL, Domain      -> display_name
 # Description / instruction text             -> instruction
 # Coverage, e.g. In scope / Out of scope     -> eligible_for_submission
 # Max severity                               -> cvss_score
@@ -34,6 +34,9 @@ class HackerOneGraphQLError(RuntimeError):
 # Last update                                -> updated_at
 # Resolved Reports                           -> total_resolved_reports
 
+# Additional
+#Type - full list (Wildcard, URL, Domain, ipaddress, awsaccount, azureaccount api, otherasset, Executable, SourceCode, AndroidPlayStore, iosappstore, iostestflight, iosipa, androidapk
+# windowsmicrosoftstore, smartcontract, hardware)
 
 GRAPHQL_SCOPE_QUERY = """
 query PolicySearchStructuredScopesQuery(

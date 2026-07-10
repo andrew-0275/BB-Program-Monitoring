@@ -7,6 +7,7 @@ from config import (
     DISCORD_CHANGE_WEBHOOK_URL,
     DISCORD_LOG_WEBHOOK_URL,
     DISCORD_BB_REPORTS_URL,
+    DISCORD_HACKTIVITY_WEBHOOK_URL,
     DISCORD_TIMEOUT,
 )
 
@@ -322,7 +323,7 @@ def format_report_changes(handle: str, items: list[dict]) -> str:
         new = values["new"]
 
         sections.append(
-            f"**{identifier}**\n"
+            f"Asset: **{identifier}**\n"
             f"Resolved Reports: `{old}` → `{new}`\n"
             f"Type: `{asset.get('display_name', 'N/A')}`\n"
             f"Bounty: {discord_bool(asset.get('eligible_for_bounty', False))}\n"
@@ -385,3 +386,171 @@ def send_discord_reports_notification(handle: str, diff: dict) -> None:
     response.raise_for_status()
 
     logging.info("[%s] Discord resolved-reports notification sent.", handle)
+
+
+def hacktivity_severity_color(severity: str) -> int:
+    colors = {
+        "critical": 0xED4245,
+        "high": 0xF47B20,
+        "medium": 0xFEE75C,
+        "low": 0x57F287,
+        "none": 0x5865F2,
+    }
+
+    return colors.get(
+        str(severity or "").lower(),
+        0x5865F2,
+    )
+
+
+def format_hacktivity_award(report: dict) -> str:
+    amount = report.get("total_awarded_amount")
+
+    if amount is None:
+        return "Not shown"
+
+    currency = report.get("program_currency") or "USD"
+
+    try:
+        return f"{currency} {float(amount):,.2f}"
+    except (TypeError, ValueError):
+        return f"{currency} {amount}"
+
+
+def build_hacktivity_embed(report: dict) -> dict:
+    title = truncate(
+        report.get("title") or "Untitled report",
+        250,
+    )
+
+    summary = truncate(
+        report.get("hacktivity_summary") or "No summary available.",
+        1000,
+    )
+
+    program_name = (
+        report.get("program_name")
+        or report.get("program_handle")
+        or "Unknown program"
+    )
+
+    program_handle = report.get("program_handle") or "N/A"
+    program_url = (
+        report.get("program_url")
+        or f"https://hackerone.com/{program_handle}"
+    )
+
+    reporter = report.get("reporter") or "N/A"
+    severity = report.get("severity_rating") or "N/A"
+    cwe = report.get("cwe") or "N/A"
+    disclosed_at = report.get("disclosed_at") or "N/A"
+    report_state = report.get("report_state") or "N/A"
+    votes = report.get("votes")
+
+    return {
+        "title": title,
+        "url": report.get("report_url"),
+        "description": summary,
+        "color": hacktivity_severity_color(severity),
+        "fields": [
+            {
+                "name": "Program",
+                "value": f"[{program_name}]({program_url})",
+                "inline": True,
+            },
+            {
+                "name": "Handle",
+                "value": f"`{program_handle}`",
+                "inline": True,
+            },
+            {
+                "name": "Report ID",
+                "value": f"`{report.get('report_id')}`",
+                "inline": True,
+            },
+            {
+                "name": "Severity",
+                "value": f"`{severity}`",
+                "inline": True,
+            },
+            {
+                "name": "State",
+                "value": f"`{report_state}`",
+                "inline": True,
+            },
+            {
+                "name": "Award",
+                "value": format_hacktivity_award(report),
+                "inline": True,
+            },
+            {
+                "name": "Reporter",
+                "value": f"`{reporter}`",
+                "inline": True,
+            },
+            {
+                "name": "Votes",
+                "value": str(votes if votes is not None else "N/A"),
+                "inline": True,
+            },
+            {
+                "name": "CWE",
+                "value": truncate(cwe, 250),
+                "inline": False,
+            },
+            {
+                "name": "Disclosed",
+                "value": f"`{disclosed_at}`",
+                "inline": False,
+            },
+        ],
+        "footer": {
+            "text": "HackerOne Hacktivity Watcher"
+        },
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+def send_discord_hacktivity_notification(
+    reports: list[dict],
+    source_url: str,
+) -> None:
+    if not DISCORD_HACKTIVITY_WEBHOOK_URL:
+        logging.info(
+            "Discord Hacktivity webhook not configured. "
+            "Skipping Hacktivity alert."
+        )
+        return
+
+    if not reports:
+        return
+
+    # Discord accepts at most 10 embeds in one webhook message.
+    batch_size = 10
+
+    for start in range(0, len(reports), batch_size):
+        batch = reports[start:start + batch_size]
+
+        payload = {
+            "username": "BB Hacktivity",
+            "content": (
+                f"📰 **{len(batch)} new HackerOne disclosure(s)**\n"
+                f"Filtered Hacktivity: <{source_url}>"
+            ),
+            "embeds": [
+                build_hacktivity_embed(report)
+                for report in batch
+            ],
+        }
+
+        response = requests.post(
+            DISCORD_HACKTIVITY_WEBHOOK_URL,
+            json=payload,
+            timeout=DISCORD_TIMEOUT,
+        )
+        response.raise_for_status()
+
+    logging.info(
+        "Discord Hacktivity notification sent for %s new report(s).",
+        len(reports),
+    )

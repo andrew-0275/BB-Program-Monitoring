@@ -19,14 +19,27 @@ from discord_notify import (
     send_discord_scope_notification,
     send_program_discovery_notification,
     send_discord_reports_notification,
+    send_discord_hacktivity_notification,
     send_run_error,
     send_run_success,
     send_target_error,
 )
-from hackerone_graphql import fetch_hackerone_scopes, normalize_response
-from watchers.hackerone import load_hackerone_targets
+from Programs.Hackerone.hackerone_graphql import (
+    fetch_hackerone_scopes,
+    normalize_response,
+)
 
-from hackerone_discovery import discover_hackerone_bounty_programs
+from Programs.Hackerone.hackerone_discovery import (
+    discover_hackerone_bounty_programs,
+)
+
+from Programs.Hackerone.hackerone_helper import (
+    load_hackerone_targets,
+)
+
+from Programs.Hackerone.discover_new_hacktivity_reports import (
+    discover_new_hacktivity_reports,
+)
 
 
 # Main() delay config
@@ -81,6 +94,16 @@ def is_paid_scope(item: dict) -> bool:
         item.get("eligible_for_bounty") is True
         and item.get("eligible_for_submission") is True
     )
+
+EXCLUDED_REPORT_ASSET_TYPES = {
+    "Executable",
+    "SourceCode",
+    "AndroidPlayStore",
+}
+
+
+def specific_report_changes(item: dict) -> bool:
+    return item.get("display_name") not in EXCLUDED_REPORT_ASSET_TYPES
 
 
 def compare_snapshots(old: dict, new: dict) -> dict:
@@ -141,7 +164,11 @@ def compare_snapshots(old: dict, new: dict) -> dict:
                 }
             )
         # Third check - New reports added to an asset
-        if old_item.get("total_resolved_reports") != new_item.get("total_resolved_reports"):
+        if (
+            specific_report_changes(new_item)
+            and old_item.get("total_resolved_reports")
+            != new_item.get("total_resolved_reports")
+        ):
             report_changes.append(
                 {
                     "identifier": new_item.get("identifier"),
@@ -382,6 +409,51 @@ def main() -> int:
             delay = random.uniform(MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
             logging.info("Sleeping %.1f seconds before next target...", delay)
             time.sleep(delay)
+
+
+    # Phase 3: Pull Hactivity Report Data and Send to Discord
+    logging.info("=" * 80)
+    logging.info(
+        "Phase 3: Checking HackerOne Hacktivity for new disclosures..."
+    )
+
+    try:
+        hacktivity_result = discover_new_hacktivity_reports()
+
+        new_hacktivity_reports = hacktivity_result["new_reports"]
+
+        logging.info(
+            "Phase 3 complete. Rows=%s New reports=%s Baseline created=%s",
+            hacktivity_result["rows_returned"],
+            hacktivity_result["new_report_count"],
+            hacktivity_result["baseline_created"],
+        )
+
+        if alerts_enabled and new_hacktivity_reports:
+            send_discord_hacktivity_notification(
+                reports=new_hacktivity_reports,
+                source_url=hacktivity_result["source_url"],
+            )
+
+    except Exception as exc:
+        failures += 1
+
+        logging.exception(
+            "Phase 3 failed: HackerOne Hacktivity error: %s",
+            exc,
+        )
+
+        if alerts_enabled:
+            try:
+                send_run_error(
+                    total_targets=len(targets),
+                    failures=failures,
+                )
+            except Exception as discord_exc:
+                logging.exception(
+                    "Failed to send Discord Hacktivity error alert: %s",
+                    discord_exc,
+                )
 
     logging.info("=" * 80)
 
